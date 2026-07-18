@@ -75,7 +75,6 @@ function EhPortableLauncherMount(B) {
       Accept: "application/json",
     };
     if (withJson) h["Content-Type"] = "application/json";
-    if (visitorIp) h["X-EmailHub-Client-IP"] = visitorIp;
     if (isTunnelApiBase()) h["ngrok-skip-browser-warning"] = "true";
     return h;
   }
